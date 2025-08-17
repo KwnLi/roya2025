@@ -1,0 +1,20 @@
+"0","#library(brms)"
+"0",""
+"0","april.lme <- lmer(dif~numYear + (numYear|quadrat), data = april.df,"
+"0","                  control = lmerControl(optimizer = ""bobyqa""))"
+"2","G3;boundary (singular) fit: see help('isSingular')
+g"
+"0","april.lme2 <- lmer(dif~numYear + (1|quadrat) + (1|runYear), data = april.df,"
+"0","                  control = lmerControl(optimizer = ""bobyqa""), REML =F)"
+"0",""
+"0","# similar results with bayesian approach?"
+"0","# april.lme.b <- brm(dif~numYear + (numYear|quadrat), data = april.df, control = list(adapt_delta = 0.99))"
+"0","# test <- allFit(april.lme)"
+"0",""
+"0","april.emm.fe <- ggemmeans(april.lme2, ""numYear"", type = ""fixed"") %>% mutate(year = 2014:2019)"
+"2","G1;[1m[33mError[39m in `mutate()`:[22m
+[38;5;232m[36mℹ[38;5;232m In argument: `year = 2014:2019`.[39m
+[1mCaused by error:[22m
+[38;5;232m[33m![38;5;232m `year` must be size 7 or 1, not 6.[39m
+[90mRun `]8;;x-r-run:rlang::last_trace()rlang::last_trace()]8;;` to see where the error occurred.[39m
+g"

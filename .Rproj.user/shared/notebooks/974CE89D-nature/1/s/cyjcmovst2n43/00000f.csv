@@ -1,0 +1,89 @@
+"0",""
+"0","april_quads <- roya_quads %>% right_join(april_halfs) %>%"
+"0","  filter(!is.na(quadrat)) %>%"
+"0","  mutate(aprquadID = paste(runID, str_pad(quadrat,side = ""left"", width = 3, pad = ""0""), sep=""q"")) %>%"
+"0","  group_by(aprquadID) %>% "
+"0","  # mutate(planting = mean(newplants)) %>% ungroup()"
+"0","  mutate(planting = as.numeric(sum(newplants)>0) ) %>% "
+"0","  mutate(n.run=n()) %>% ungroup() %>% filter(n.run > 4) %>% "
+"0","  select(-n.run)"
+"2","[38;5;232mJoining with `by = join_by(date)`[39m
+"
+"2","G2;H2;Warningh in right_join(., april_halfs) :
+  [38;5;232mDetected an unexpected many-to-many relationship between `x` and `y`.
+[36mℹ[38;5;232m Row 1537 of `x` matches multiple rows in `y`.
+[36mℹ[38;5;232m Row 5 of `y` matches multiple rows in `x`.
+[36mℹ[38;5;232m If a many-to-many relationship is expected, set `relationship =
+  ""many-to-many""` to silence this warning.[39mg
+"
+"0","april.lm <- list()"
+"0","april.summary <- list()"
+"0","april.df <- list()"
+"0",""
+"0","aprquadIDs <- unique(april_quads$aprquadID)"
+"0","for(z in 1:length(aprquadIDs)){"
+"0","  "
+"0","  april.z <- april_quads %>% filter(aprquadID == aprquadIDs[z])"
+"0","    "
+"0","  april.lm[[z]] <- lm(inf_mn ~ incr_month*firsthalf, "
+"0","                      data = april.z)"
+"0","  "
+"0","  april.summary[[z]] <- summary(april.lm[[z]])"
+"0","  april.df[[z]] <- data.frame("
+"0","    aprquadID = aprquadIDs[z],"
+"0","    dif = april.summary[[z]]$coefficients[""incr_month:firsthalf"",""Estimate""]/april.z$runLength[1])"
+"0","}"
+"2","G2;H2;Warningh in summary.lm(april.lm[[z]]) :
+  essentially perfect fit: summary may be unreliableg
+"
+"2","G2;H2;Warningh in summary.lm(april.lm[[z]]) :
+  essentially perfect fit: summary may be unreliableg
+"
+"2","G2;H2;Warningh in summary.lm(april.lm[[z]]) :
+  essentially perfect fit: summary may be unreliableg
+"
+"2","G2;H2;Warningh in summary.lm(april.lm[[z]]) :
+  essentially perfect fit: summary may be unreliableg
+"
+"2","G2;H2;Warningh in summary.lm(april.lm[[z]]) :
+  essentially perfect fit: summary may be unreliableg
+"
+"2","G2;H2;Warningh in summary.lm(april.lm[[z]]) :
+  essentially perfect fit: summary may be unreliableg
+"
+"2","G2;H2;Warningh in summary.lm(april.lm[[z]]) :
+  essentially perfect fit: summary may be unreliableg
+"
+"2","G2;H2;Warningh in summary.lm(april.lm[[z]]) :
+  essentially perfect fit: summary may be unreliableg
+"
+"2","G2;H2;Warningh in summary.lm(april.lm[[z]]) :
+  essentially perfect fit: summary may be unreliableg
+"
+"2","G2;H2;Warningh in summary.lm(april.lm[[z]]) :
+  essentially perfect fit: summary may be unreliableg
+"
+"2","G2;H2;Warningh in summary.lm(april.lm[[z]]) :
+  essentially perfect fit: summary may be unreliableg
+"
+"2","G2;H2;Warningh in summary.lm(april.lm[[z]]) :
+  essentially perfect fit: summary may be unreliableg
+"
+"2","G2;H2;Warningh in summary.lm(april.lm[[z]]) :
+  essentially perfect fit: summary may be unreliableg
+"
+"2","G2;H2;Warningh in summary.lm(april.lm[[z]]) :
+  essentially perfect fit: summary may be unreliableg
+"
+"2","G2;H2;Warningh in summary.lm(april.lm[[z]]) :
+  essentially perfect fit: summary may be unreliableg
+"
+"2","G2;H2;Warningh in summary.lm(april.lm[[z]]) :
+  essentially perfect fit: summary may be unreliableg
+"
+"0","april.df <- bind_rows(april.df) %>%"
+"0","  left_join(april_quads %>% "
+"0","              select(aprquadID, quadrat, runYear, numYear, planting) %>% "
+"0","              distinct())"
+"2","[38;5;232mJoining with `by = join_by(aprquadID)`[39m
+"

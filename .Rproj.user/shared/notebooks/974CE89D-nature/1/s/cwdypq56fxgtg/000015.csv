@@ -1,0 +1,8 @@
+"0","pv.emm.re <- ggemmeans(pv.lme2, ""numYear"", type = ""random"") %>% mutate(year = 2014:2019)
+"
+"2","G1;[1m[33mError[39m in `mutate()`:[22m
+[38;5;232m[36mℹ[38;5;232m In argument: `year = 2014:2019`.[39m
+[1mCaused by error:[22m
+[38;5;232m[33m![38;5;232m `year` must be size 7 or 1, not 6.[39m
+[90mRun `]8;;x-r-run:rlang::last_trace()rlang::last_trace()]8;;` to see where the error occurred.[39m
+g"

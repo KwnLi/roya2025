@@ -1,0 +1,926 @@
+---
+title: "A climate change mediated critical transition in the coffee rust disease"
+output: pdf_document
+---
+
+
+## Summary
+
+
+
+# Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(ggeffects)
+library(tidyverse)
+library(here)
+library(ggsci)
+library(gridExtra)
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(plot3D)
+library(egg)
+library(grid)
+library(cowplot)
+source(here("R/find_peakvalley.r"))
+
+# read in roya data and calculate infection level
+roya <- readRDS(here("data/roya_uniqueplants_20250817.rds")) %>%
+  mutate(plantgen = if_else(plantnum ==0, "original", "new plant"))
+
+# missing dates
+first.date <- min(roya$date)
+last.date <- max(roya$date)
+fill.dates <- data.frame(date = zoo::as.yearmon(
+  first.date + seq(0, (last.date-first.date)*12)/12)
+  )
+
+# average roya and hojas
+roya_clean <- roya %>% 
+  filter(!(is.na(roya)|is.na(hojas)|hojas==0)) %>%
+  mutate(infect = roya/hojas) %>% filter(infect < 1)
+
+roya_avg <- roya_clean %>% 
+  bind_rows(roya_clean %>% mutate(plantgen = "all")) %>%
+  group_by(date, plantgen) %>% 
+  summarize(n = n(), roya_mn = exp(mean(log(roya+1)))-1, 
+            roya_upr = exp(mean(log(roya+1)) + (sd(log(roya+1))/sqrt(n)))-1,
+            roya_lwr = exp(mean(log(roya+1)) - (sd(log(roya+1))/sqrt(n)))-1,
+            hoja_mn = exp(mean(log(hojas))),
+            hoja_upr = exp(mean(log(hojas)) + (sd(log(hojas))/sqrt(n))),
+            hoja_lwr = exp(mean(log(hojas)) - (sd(log(hojas))/sqrt(n))),
+            inf_mn = exp(mean(log(infect + 0.001)))-0.001,
+            inf_upr = exp(mean(log(infect + 0.001)) + (sd(log(infect + 0.001))/sqrt(n)))-0.001,
+            inf_lwr = exp(mean(log(infect + 0.001)) - (sd(log(infect + 0.001))/sqrt(n)))-0.001
+            ) %>%
+  ungroup()
+
+# # rain
+# rain <- readRDS(here("Data/rain_202010.rds")) %>% filter(date >= "Jan 2013")
+# rain.ann <- read.csv(here("Data/Raw Data/annual_rain_202010.csv")) %>%
+#   filter(year < 2020)
+# 
+# rain.month.avg <- rain %>% mutate(month = as.numeric(format(date, "%m"))) %>%
+#   group_by(month) %>% summarize(rain.avg = mean(rainmm, na.rm=TRUE)) %>% ungroup()
+# 
+# rain2 <- rain %>% mutate(month = as.numeric(format(date, "%m"))) %>%
+#   left_join(rain.month.avg, by = "month") %>% 
+#   mutate(rain.dev = rainmm - rain.avg)
+
+# missing dates
+first.date <- min(roya$date)
+last.date <- max(roya$date)
+fill.dates <- data.frame(date = zoo::as.yearmon(
+  first.date + seq(0, (last.date-first.date)*12)/12)
+  )
+```
+
+
+## Model slope difference from first and second half (plot avg)
+
+### Find Peaks and valleys
+```{r peakvalley}
+
+# April peaks and valleys
+aprilpv <- roya_avg %>% 
+  filter(plantgen == "all") %>%
+  full_join(fill.dates, by = "date") %>%
+  find_peakvalley(valuecol = "inf_mn", datecol = "date", max.offset = 5) %>% 
+  mutate(april = as.numeric(format(.$date, "%m")=="04")) %>%
+  find_runs(start.run = "april", run.prefix = "a") %>% 
+  filter(runtype == "growth")
+
+aprilruns <- aprilpv %>% select(date, runID) %>%
+  group_by(runID) %>%
+  mutate(runYear = format(min(date), "%Y")) %>%
+  mutate(numYear = as.numeric(runYear)-2013) %>%
+  mutate(runLength = 12*(max(date) - min(date))) %>%
+  mutate(incr_month = 12*(date - min(date))) %>% 
+  mutate(half1 = as.numeric(date <= findmiddle(date,1))) %>%
+  mutate(half2 = as.numeric(date >= findmiddle(date,2))) %>%
+  ungroup()
+
+aprIDs <- unique(aprilruns$runID)
+
+april_halfs <- list()
+for(i in 1:length(aprIDs)){
+  april_halfs[[i]] <- aprilruns %>% 
+    filter(runID == aprIDs[i] & half1 == 1) %>%
+    mutate(firsthalf = 1) %>%
+      bind_rows(aprilruns %>% 
+                  filter(runID == aprIDs[i] & half2 == 1) %>%
+                  mutate(firsthalf = 0)) %>%
+    # group_by(firsthalf) %>% 
+    # mutate(n.half = 12*(max(date) - min(date)) + 1) %>%
+    # mutate(t.half = (12*(date - min(date)) + 1)/n.half) %>%
+    ungroup() 
+}
+april_halfs <- bind_rows(april_halfs)
+
+
+# Plot "true" peaks and valleys
+royapv <- roya_avg %>% filter(plantgen == "all") %>%
+  full_join(fill.dates, by = "date") %>%
+  find_peakvalley(valuecol = "inf_mn", datecol = "date", max.offset = 5) %>%
+  find_runs() %>% filter(runtype == "growth") 
+
+royaruns <- royapv %>% select(date, end.num, runID) %>%
+  group_by(runID) %>%
+  mutate(startDate = min(date)) %>%
+  mutate(startMonth = as.numeric(format(startDate, "%m"))) %>%
+  mutate(runLength = 12*(max(date) - min(date))) %>%
+  mutate(incr_month = 12*(date - startDate)) %>%
+  mutate(runYear = format(startDate, "%Y")) %>%
+  mutate(numYear = as.numeric(runYear)-2013) %>%
+  mutate(half1 = as.numeric(date <= findmiddle(date,1))) %>%
+  mutate(half2 = as.numeric(date >= findmiddle(date,2))) %>%
+  ungroup()
+
+pvIDs <- unique(royaruns$runID)
+pv_halfs <- list()
+for(i in 1:length(pvIDs)){
+  pv_halfs[[i]] <- royaruns %>% 
+    filter(runID == pvIDs[i] & half1 == 1) %>%
+    mutate(firsthalf = 1) %>%
+      bind_rows(royaruns %>% 
+                  filter(runID == pvIDs[i] & half2 == 1) %>%
+                  mutate(firsthalf = 0)) %>%
+    # group_by(firsthalf) %>% 
+    # mutate(n.half = 12*(max(date) - min(date)) + 1) %>%
+    # mutate(t.half = (12*(date - min(date)) + 1)/n.half) %>%
+    ungroup()
+}
+pv_halfs <- bind_rows(pv_halfs)
+
+```
+
+## Quadrat based models
+
+```{r quad_avg}
+
+roya_quads <- roya_clean %>% 
+  #filter(plantgen == "original") %>%
+  group_by(date, quadrat) %>% 
+  summarize(n = n(), roya_mn = exp(mean(log(roya+1)))-1, 
+            roya_upr = exp(mean(log(roya+1)) + (sd(log(roya+1))/sqrt(n)))-1,
+            roya_lwr = exp(mean(log(roya+1)) - (sd(log(roya+1))/sqrt(n)))-1,
+            hoja_mn = exp(mean(log(hojas))),
+            hoja_upr = exp(mean(log(hojas)) + (sd(log(hojas))/sqrt(n))),
+            hoja_lwr = exp(mean(log(hojas)) - (sd(log(hojas))/sqrt(n))),
+            inf_mn = mean(log(100*(infect + 0.001))),
+            inf_upr = mean(log(100*(infect + 0.001))) + 
+              (sd(log(100*(infect + 0.001)))/sqrt(n)),
+            inf_lwr = mean(log(100*(infect + 0.001))) - 
+              (sd(log(100*(infect + 0.001)))/sqrt(n)),
+            newplants = sum(plantgen == "new plant")/n
+            ) %>%
+  ungroup()
+
+```
+
+```{r april_halfs}
+
+april_quads <- roya_quads %>% right_join(april_halfs) %>%
+  filter(!is.na(quadrat)) %>%
+  mutate(aprquadID = paste(runID, str_pad(quadrat,side = "left", width = 3, pad = "0"), sep="q")) %>%
+  group_by(aprquadID) %>% 
+  # mutate(planting = mean(newplants)) %>% ungroup()
+  mutate(planting = as.numeric(sum(newplants)>0) ) %>% 
+  mutate(n.run=n()) %>% ungroup() %>% filter(n.run > 4) %>% 
+  select(-n.run)
+
+april.lm <- list()
+april.summary <- list()
+april.df <- list()
+
+aprquadIDs <- unique(april_quads$aprquadID)
+for(z in 1:length(aprquadIDs)){
+  
+  april.z <- april_quads %>% filter(aprquadID == aprquadIDs[z])
+    
+  april.lm[[z]] <- lm(inf_mn ~ incr_month*firsthalf, 
+                      data = april.z)
+  
+  april.summary[[z]] <- summary(april.lm[[z]])
+  april.df[[z]] <- data.frame(
+    aprquadID = aprquadIDs[z],
+    dif = april.summary[[z]]$coefficients["incr_month:firsthalf","Estimate"]/april.z$runLength[1])
+}
+
+april.df <- bind_rows(april.df) %>%
+  left_join(april_quads %>% 
+              select(aprquadID, quadrat, runYear, numYear, planting) %>% 
+              distinct())
+
+
+```
+
+```{r april_model}
+#library(brms)
+
+april.lme <- lmer(dif~numYear + (numYear|quadrat), data = april.df,
+                  control = lmerControl(optimizer = "bobyqa"))
+april.lme2 <- lmer(dif~numYear + (1|quadrat) + (1|runYear), data = april.df,
+                  control = lmerControl(optimizer = "bobyqa"), REML =F)
+
+# similar results with bayesian approach?
+# april.lme.b <- brm(dif~numYear + (numYear|quadrat), data = april.df, control = list(adapt_delta = 0.99))
+# test <- allFit(april.lme)
+
+april.emm.fe <- ggemmeans(april.lme2, "numYear", type = "fixed") %>% mutate(year = 2014:2019)
+
+april.emm.re <- ggemmeans(april.lme2, "numYear", type = "random") %>% mutate(year = 2014:2019)
+
+
+aprildif.means <- april.df %>% group_by(runYear) %>%
+  summarize(n=n(), dif.mn = mean(dif), dif.se = sd(dif)/sqrt(n)) %>% ungroup() %>%
+  mutate(year = as.numeric(runYear))
+
+
+```
+
+```{r peakvalley_halfs}
+
+pv_quads <- roya_quads %>% right_join(pv_halfs) %>%
+  mutate(pvquadID = paste(runID, str_pad(quadrat,side = "left", width = 3, pad = "0"), sep="q")) %>%
+  group_by(pvquadID) %>%
+  mutate(newplanting = as.numeric(sum(newplants)>0)) %>%
+  mutate(planting = max(newplants)) %>%
+  mutate(planting.change = max(newplants)-min(newplants)) %>%
+  mutate(n.run=n()) %>% ungroup() %>% filter(n.run > 4)
+
+pv.lm <- list()
+pv.summary <- list()
+pv.df <- list()
+
+pvquadIDs <- unique(pv_quads$pvquadID)
+for(z in 1:length(pvquadIDs)){
+  
+  pvquad.z <- pv_quads %>% filter(pvquadID == pvquadIDs[z])
+    
+  pv.lm[[z]] <- lm(inf_mn ~ incr_month*firsthalf, 
+                      data = pvquad.z)
+  
+  pv.summary[[z]] <- summary(pv.lm[[z]])
+  pv.df[[z]] <- data.frame(
+    pvquadID = pvquadIDs[z],
+    dif = pv.summary[[z]]$coefficients["incr_month:firsthalf","Estimate"]/pvquad.z$runLength[1])
+}
+pv.df <- bind_rows(pv.df) %>%
+  left_join(pv_quads %>% 
+              select(pvquadID, quadrat, runYear, numYear, planting) %>%
+              distinct())
+
+
+```
+
+```{r pv_model}
+#library(brms)
+
+pv.lme <- lmer(dif~numYear + (numYear|quadrat), data = pv.df,
+                  control = lmerControl(optimizer = "bobyqa"))
+pv.lme2 <- lmer(dif~numYear + planting + (1|quadrat) + (1|runYear), data = pv.df,
+                  control = lmerControl(optimizer = "bobyqa"), REML =F)
+# similar results with bayesian approach?
+# april.lme.b <- brm(dif~numYear + (numYear|quadrat), data = april.df, control = list(adapt_delta = 0.99))
+# test <- allFit(april.lme)
+
+pv.emm.fe <- ggemmeans(pv.lme2, "numYear", type = "fixed") %>% mutate(year = 2014:2019)
+
+pv.emm.re <- ggemmeans(pv.lme2, "numYear", type = "random") %>% mutate(year = 2014:2019)
+
+pvdif.means <- pv.df %>% group_by(numYear) %>%
+  summarize(n=n(), dif.mn = mean(dif), dif.se = sd(dif)/sqrt(n)) %>% ungroup()
+
+pv.lme.f <- lmer(dif~runYear + (1|quadrat), data = pv.df,
+                  control = lmerControl(optimizer = "bobyqa"), REML =F)
+
+pvf.emm <- ggemmeans(pv.lme.f, "runYear", type = "fixed") %>% mutate(year = 2014:2019)
+
+
+p.pvlambda <- ggplot(pv.emm.re, aes(year, predicted)) +
+  geom_hline(yintercept = 0) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha=0.2) +
+  geom_ribbon(data = pv.emm.fe,
+              mapping = aes(ymin = conf.low, ymax = conf.high), alpha=0.5) +
+  geom_line() + xlab("Year") + ylab(expression(lambda)) +
+  geom_pointrange(data = pvf.emm,
+                  mapping = aes(x = year, y = predicted,
+                                ymin = conf.low, ymax = conf.high),
+                  size = 0.2,
+                  inherit.aes = F) +
+  theme_bw() +
+  theme(panel.grid = element_blank())
+
+# ggsave(plot = p.pvlambda, width = 89, height = 60, dpi = 600, units = "mm", filename = "pvquad_lambda.png")
+
+
+```
+
+# Rain trends
+
+```{r rain_trends_annual}
+
+rainlm1 <- lm(total ~ year, data = rain.ann %>% filter(year %in% 2004:2012)) 
+rainlm2 <- lm(total ~ year, data = rain.ann %>% filter(year %in% 2012:2019)) 
+
+rainlm.all <- lm(total ~ year, data = rain.ann %>% filter(year %in% 2004:2019)) 
+
+rainlm.allci <- lm(total ~ year, data = rain.ann %>% filter(year %in% 2004:2019)) %>% predict(interval = "confidence") %>% as_tibble() %>%
+  bind_cols(rain.ann %>% filter(year %in% 2004:2019) %>% select(year))
+
+p.ann.rain <- ggplot(rain.ann %>% filter(year %in% 2004:2019), 
+                     aes(x=year, y=total)) + 
+  # geom_line(data = rainlm.allci, mapping = aes(x = year, y = lwr), 
+  #           inherit.aes = F, lty = 2, lwd = 1, color = "grey 20") +
+  # geom_line(data = rainlm.allci, mapping = aes(x = year, y = upr), 
+  #           inherit.aes = F, lty = 2, lwd = 1, color = "grey 20") +
+  geom_smooth(method = "lm", se = F, color = "grey 15", lty = 2) +
+  # geom_smooth(method = "gam") + 
+  geom_smooth(data = rain.ann %>% filter(year %in% 2004:2012), method = "lm"
+              ) +
+  geom_smooth(data = rain.ann %>% filter(year %in% 2012:2019), method = "lm"
+              ) +
+  theme_bw() + geom_point() + 
+  theme(panel.grid = element_blank(),
+        axis.text = element_text(size = 8)) +
+  ylab("Annual rainfall (mm)") + 
+  geom_point(data=rain.ann %>% filter(year==2012), color = "red1", size =3) +
+  scale_x_continuous(name = "Year", breaks = seq(from=2003,to=2019, by = 2))
+
+# ggsave(plot = p.ann.rain, width = 89, height = 60, dpi = 600, units = "mm", filename = "annualrain_lm.png")
+
+
+```
+
+
+# Multiple regression
+```{r multiple_regression}
+
+pv_monrain <- pv.df %>% 
+  left_join(rain %>% mutate(runYear = format(date, "%Y")) %>% 
+              group_by(runYear) %>% summarize(month.rain = mean(rainmm)) %>%
+              ungroup())
+
+pvrainmn.lme0 <- lmer(dif~numYear + month.rain + planting + 
+                       (1|quadrat) + (1|runYear), 
+                     data = pv_monrain,
+                  control = lmerControl(optimizer = "bobyqa"), REML =T)
+
+
+pvrainmn.lme1 <- lmer(dif~month.rain + planting + 
+                       (1|quadrat) + (1|runYear), 
+                     data = pv_monrain,
+                  control = lmerControl(optimizer = "bobyqa"), REML =F) # LRT supported
+
+# pvrainmnx.lme <- lmer(dif~ numYear*scale(month.rain) + planting + 
+#                         (1|quadrat) + (1|runYear), 
+#                      data = pv_monrain,
+#                   control = lmerControl(optimizer = "bobyqa"), REML =T)
+
+
+
+```
+
+# individual quadrat trajectories
+```{r quad_runs}
+quadruns <- list()
+
+quadrats <- unique(roya_quads$quadrat)
+
+for(g in 1:length(quadrats)){
+  quad.g <- roya_quads %>% filter(quadrat == quadrats[g])
+  
+  quadruns.g <- quad.g %>% 
+    right_join(fill.dates, by = "date") %>%
+    find_peakvalley(valuecol = "inf_mn", datecol = "date", 5) %>%
+    find_runs(run.prefix = 
+                paste("Q", str_pad(quadrats[g], 3, "left", pad="0"),"-",
+                      sep=""))
+  
+  quadruns[[g]] <- left_join(quad.g, quadruns.g, 
+                             by = "date")
+}
+
+quadruns2 <- bind_rows(quadruns) %>% 
+  group_by(runID) %>%
+  filter(runtype == "growth") %>%
+  mutate(startDate = min(date)) %>%
+  mutate(startYear = as.numeric(format(startDate, "%Y"))) %>% 
+  mutate(startMonth = as.numeric(format(startDate, "%m"))) %>%
+  filter(startYear > 2013 & startYear < 2020) %>%
+  mutate(run.n = n()) %>%
+  mutate(run.time = 12*(date - min(date))) %>%
+  mutate(run.months = 1+ 12*(max(date)-min(date))) %>%
+  mutate(data.ratio = run.n/run.months) %>% 
+  ungroup() %>%
+  mutate(runYear = as.factor(startYear)) %>%
+  mutate(numYear = startYear - 2013) %>%
+  filter(run.n > 4 & data.ratio > 0.5) %>%
+  filter(runID !="Q100-08" & runID != "Q100-10")  # remove two in 1 year
+
+```
+
+```{r quad_takeoffs}
+
+takeoffs <- quadruns2 %>% filter(takeoff) %>% 
+  left_join(pv.df) %>%
+  left_join(rain %>% mutate(runYear = format(date, "%Y")) %>% 
+              group_by(runYear) %>% summarize(month.rain = mean(rainmm)) %>%
+              ungroup())
+
+# check value at lag1 to see if any takeoffs were identified following a NA
+takeoffstest <- takeoffs %>%
+  left_join(roya_quads %>% 
+              right_join(expand.grid(date=fill.dates$date, quadrat = 1:128)) %>%
+              group_by(quadrat) %>%
+              mutate(laginf = lag(inf_mn, n=1, order_by=date)) %>% ungroup() %>%
+              select(date, quadrat, laginf))
+
+takeoffs2 <- takeoffs[-301,]  # this one is missing too many before the takeoff
+
+mn.rain = mean(takeoffs %>% select(runYear, month.rain) %>% distinct() %>%
+                 pull(month.rain))
+  
+
+# ggplot(takeoffs) + geom_histogram(aes(startMonth, fill = planting), binwidth = 1) + facet_wrap(facets = ~runYear)
+
+takeoff.lme0 <- lmer(startMonth ~ numYear + month.rain + planting + (1|quadrat) + (1|runYear), data = takeoffs, REML = F) # LRT supported
+
+takeoff.lme1 <- lmer(startMonth ~ numYear + planting + (1|quadrat) + (1|runYear), data = takeoffs, REML = F)
+
+```
+
+``` {r bayesian}
+library(brms)
+# library(rstan)
+takeoffs2 <- takeoffs2 %>% mutate(rain = month.rain/100)
+# multivariate
+# iter = 5000
+# chains = 4
+# cores = 3
+# control = list(adapt_delta = 0.999, max_treedepth = 15)
+# 
+# scode <- brms::make_stancode(mvbind(startMonth, dif) ~ 0 +
+#                       numYear + rain + planting + 
+#                       (1|q|quadrat) + (1|p|runYear), 
+#                     data = takeoffs2)
+# sdata <- brms::make_standata(mvbind(startMonth, dif) ~ 0 +
+#                       numYear + rain + planting + 
+#                       (1|q|quadrat) + (1|p|runYear), 
+#                     data = takeoffs2)
+# stanfit <- rstan::stan(model_code = scode, data = sdata,
+#                     iter=iter, chains=chains, cores = cores,
+#                     control = control)
+# saveRDS(stanfit, "takeoffstanfit1.rds")
+# 
+# takeoff.brms <- brm(mvbind(startMonth, dif) ~ 0 +
+#                       numYear + rain + planting + 
+#                       (1|q|quadrat) + (1|p|runYear), 
+#                     data = takeoffs2, empty = TRUE)
+# brms_fit$fit <- stanfit
+# brms_fit <- rename_pars(brms_fit)
+
+takeoff.brms <- brm(mvbind(startMonth, dif) ~ 
+                      numYear + rain + planting + 
+                      (1|q|quadrat) + (1|p|runYear), 
+                    data = takeoffs2, iter = 6000,
+                    chains = 4, cores = 3,
+                    control = list(adapt_delta = 0.999,
+                                   max_treedepth = 15) 
+                    )
+
+saveRDS(takeoff.brms, "takeoffbrms.rds")
+
+takeoff.brms2 <- brm(mvbind(startMonth, dif) ~ 
+                      numYear + rain + planting + 
+                      (1|q|quadrat) + (1|runYear), 
+                    data = takeoffs2, iter = 6000,
+                    chains = 4, cores = 3,
+                    control = list(adapt_delta = 0.9999,
+                                   max_treedepth = 15) 
+                    )
+
+saveRDS(takeoff.brms2, "takeoffbrms2.1.rds")
+
+
+prior3 <- c(set_prior("normal(0,100)", class = "b", resp = "startMonth"),
+            set_prior("normal(0,100)", class = "b", resp = "dif"),
+            set_prior("normal(0,100)", class = "Intercept", 
+                      resp = "startMonth"))
+
+takeoff.brms3 <- brm(mvbind(startMonth, dif) ~ 
+                      numYear + rain + planting + 
+                      (1|q|quadrat) + (1|runYear), 
+                    data = takeoffs2, prior = prior3,
+                    iter = 6000,
+                    chains = 4, cores = 3,
+                    control = list(adapt_delta = 0.999,
+                                   max_treedepth = 15) 
+                    )
+
+saveRDS(takeoff.brms3, "takeoffbrms3.rds")
+
+# p.takeoffs <- ggplot(emm.takeoff, aes(x = Year, y = emmean)) + 
+#   geom_ribbon(aes(ymin = lower.CL, ymax = upper.CL), alpha = 0.2) + 
+#   geom_line() + 
+#   geom_pointrange(data=emm.takeoff.f, aes(
+#     x = Year, y = emmean, ymin = lower.CL, ymax = upper.CL),
+#     size = 0.2) +
+#   ylab("Takeoff month") + theme_bw() +
+#   theme(panel.grid = element_blank(), 
+#         axis.text=element_text(size=8), axis.title = element_text(size=8))
+# 
+# ggsave(plot = p.takeoffs, width = 80, height = 60, dpi = 600, units = "mm", filename = "takeoffs.png")
+
+```
+
+```{r wambs}
+# protocol from https://www.rensvandeschoot.com/brms-wambs/
+library(ggmcmc)
+library(coda)
+
+takeoff.brms <- readRDS("takeoffbrms.rds")
+takeoff.brms2 <- readRDS("takeoffbrms2.1.rds")
+takeoff.brms3 <- readRDS("takeoffbrms3.rds")
+
+takeoff.brms <- add_criterion(takeoff.brms, "loo")
+takeoff.brms2 <- add_criterion(takeoff.brms2, "loo")
+takeoff.brms3 <- add_criterion(takeoff.brms3, "loo")
+
+modeltranformed <- ggs(takeoff.brms2)
+
+ggplot(filter(modeltranformed, Parameter %in%
+                c("b_startMonth_Intercept", 
+                  "b_dif_Intercept", 
+                  "b_startMonth_numYear",
+                  "b_startMonth_rain", 
+                  "b_startMonth_planting", 
+                  "b_dif_numYear",
+                  "b_dif_rain",
+                  "b_dif_planting",
+                  "cor_quadrat__startMonth_Intercept__dif_Intercept",
+                  "cor_runYear__startMonth_Intercept__dif_Intercept",
+                  "sigma_startMonth",
+                  "sigma_dif"
+                  ),
+              Iteration > 1000),
+       aes(x   = Iteration,
+           y   = value, 
+           col = as.factor(Chain)))+
+  geom_line()+
+  facet_grid(Parameter ~ .,
+             scale  = 'free_y',
+             switch = 'y')+
+  labs(title = "Caterpillar Plots",
+       col   = "Chains")
+
+modelposterior <- as.mcmc(takeoff.brms2)
+gelman.diag(modelposterior[, 1:8, 13:16])
+gelman.plot(modelposterior[, 1:8, 13:16])
+geweke.diag(modelposterior[, 1:8, 13:16])
+geweke.plot(modelposterior[, 1:8, 13:16])
+
+brms::mcmc_plot(takeoff.brms, type = "hist")
+
+autocorr.diag(modelposterior[, 1:8, 13:16], 
+              lags = c(0, 1,2,3,4, 5, 10, 50))
+
+# bias 
+compare12 <- round(100*((summary(takeoff.brms)$fixed - summary(takeoff.brms2)$fixed) / summary(takeoff.brms2)$fixed), 3)[,"Estimate"]
+
+compare23 <- round(100*((summary(takeoff.brms3)$fixed - summary(takeoff.brms2)$fixed) / summary(takeoff.brms2)$fixed), 3)[,"Estimate"]
+
+mcmc_plot(takeoff.brms2, pars = c(1:8, 13:16), type = "dens")
+
+takeoffsummary <- summary(takeoff.brms2)
+
+test.sm <- pp_check(takeoff.brms2, resp = "startMonth",type = "scatter_avg")
+test.dif <- pp_check(takeoff.brms2, resp = "dif",type = "scatter_avg")
+
+difpp <- test$data %>% bind_cols(takeoffs2 %>% select(quadrat, numYear))
+```
+# Plots
+
+```{r plotinfect}
+
+p.aprillambda <- ggplot(april.emm.fe, aes(year, predicted)) +
+  geom_hline(yintercept = 0, color = "dark gray", size = 0.2) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high), alpha=0.2) +
+  geom_line() + ylab(expression(lambda))+ xlab("Year") +
+  # geom_boxplot(data = april.df %>% mutate(year = numYear + 2013), 
+              # mapping = aes(x = year, y = dif, group = year), inherit.aes = F) +
+  geom_pointrange(data = aprildif.means,
+                  mapping = aes(x = year, y = dif.mn,
+                                ymin = dif.mn - dif.se, 
+                                ymax = dif.mn + dif.se),
+                  size = 0.6, fatten = 1.2, inherit.aes = F) +
+  theme_article() +
+  scale_x_continuous(breaks = 2014:2019) +
+  coord_cartesian(xlim = c(2013.25,2019.75), expand=0) +
+  theme(panel.grid = element_blank()) +
+    annotate(geom = "text", x=2018, y = 0.05, size = 3, 
+             label = expression(italic(d*lambda/dt)==-0.012))
+
+
+rainscale2 = 200
+p.infect <- ggplot(roya_avg %>% filter(plantgen == "all"), aes(x = date)) +
+  theme_article() + 
+  geom_linerange(data = rain %>% mutate(data = "rain"),
+                 mapping = aes(x= date, ymin = 0,
+                               ymax = (rainmm/rainscale2)),
+                 color = "light blue", size = 0.8, inherit.aes = FALSE) +
+  geom_vline(xintercept = 2014.25:2019.25, 
+             color = "green", size = 0.2) +
+  geom_line(aes(y = inf_mn*100), size = 0.2, color = "red1") + 
+  geom_pointrange(aes(y = inf_mn*100, ymin = 100*inf_lwr, ymax = 100*inf_upr), 
+                  size = 0.2, fatten = 0.5, color = "red1") +
+  ylab("% infected leaves") +
+  xlab("Year") +
+  geom_hline(yintercept = 0, color = "dark gray", size = 0.2) +
+  scale_y_continuous(limits=c(0,9),
+                     sec.axis = sec_axis(~ .*rainscale2,
+                                         name = "Rain (mm)")) + 
+  scale_x_continuous(breaks = c(2014,2014.25,2015,2015.25,
+                                2016,2016.25,2017,2017.25,
+                                2018,2018.25,2019,2019.25,
+                                2020),
+                     labels = c("2014","","2015","","2016","",
+                                "2017","","2018","","2019","","2020")) +
+  theme(panel.grid = element_line(color = "dark gray"),
+        panel.grid.minor.y = element_blank(), 
+        panel.grid.major.y = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.x = element_blank(), #element_line(size = 0.2),
+        legend.position = "none",
+        axis.text = element_text(size = 8), 
+        axis.ticks.x = element_line(
+          color= c("dark grey","green","dark grey", "green", 
+                   "dark grey", "green", "dark grey","green",
+                   "dark grey", "green", "dark grey", "green",
+                   "dark grey"),
+          size = c(0.5,0.2,0.5,0.2,0.5,0.2,
+                   0.5,0.2,0.5,0.2,0.5,0.2,0.5)),
+        axis.title.x = element_blank()) +
+  coord_cartesian(xlim = c(2013.5,2020.5), ylim = c(0,8.5), expand = 0)
+
+fig1 <- egg::ggarrange(p.infect, 
+                  p.aprillambda, 
+                  ncol = 1,
+                  heights=c(1.5,1), labels=c("A","B"),
+                  label.args = list(gp = grid::gpar(font = 2))
+                  )
+
+ggsave(plot = fig1, width = 89, height = 100, dpi = 600, units = "mm", filename = "fig1.png")
+
+```
+
+```{r data_plot}
+month.labels = c("4", "8", "12", "+4")
+
+quadyrs <- list()
+plotyrs <- list()
+for(i in 1:6){
+  quadyrs[[i]] <- roya_quads %>% 
+    filter(date >= 2013+i & date <= 2014.5+i) %>%
+    mutate(runYear = as.character(2013+i)) %>%
+    mutate(numYear = i) %>%
+    mutate(month = as.numeric(format(min(date), "%m"))+12*(date-min(date)))
+  
+  plotyrs[[i]] <- roya_avg %>% 
+    filter(plantgen == "all" & date >= 2013+i & date <= 2014.5+i) %>%
+    mutate(inf_mn = log(100*inf_mn)) %>% 
+    mutate(runYear = as.character(2013+i)) %>%
+    mutate(numYear = i) %>%
+    mutate(month = as.numeric(format(min(date), "%m"))+12*(date-min(date)))
+}
+quadyrs <- bind_rows(quadyrs)
+plotyrs <- bind_rows(plotyrs)
+
+pv.lm.example <- lm(inf_mn ~ runYear*date*firsthalf, 
+                       data = pv_halfs %>% 
+                         left_join(roya_avg %>% filter(plantgen == "all") %>%
+                                     mutate(inf_mn = log(inf_mn*100)) %>%
+                                     select(date, inf_mn)))
+
+plot.example.pv <- pv_halfs %>% select(date, runYear, numYear, startMonth, incr_month) %>%
+  mutate(firsthalf = 1) %>%
+  bind_rows(
+    pv_halfs %>%
+      select(date, runYear, numYear, startMonth, incr_month) %>%
+      mutate(firsthalf = 0)) %>%
+  mutate(month = incr_month + startMonth)
+
+plot.example.pv$estimate = predict(pv.lm.example, newdata = plot.example.pv)
+
+
+
+plot.data <- {ggplot(quadyrs, aes(month, inf_mn, group = quadrat)) +
+    geom_line(color = "red", alpha = 0.2) +
+    geom_vline(data=takeoffs2, 
+               aes(xintercept = jitter(startMonth, amount = 0.5)), 
+               color = "blue", alpha = 0.2) +
+  geom_line(data = plotyrs, aes(x=month, y=inf_mn),
+            color = "red4", alpha = 0.6, size = 2, lineend = "round", inherit.aes = F) +
+  geom_vline(xintercept = 4, color = "green", size = 1) +
+  geom_line(data = plot.example.pv, 
+            aes(x=month, y=estimate, lty = as.factor(firsthalf)), 
+            size = 1, inherit.aes = F)+
+  theme_article() + ylab("ln(% rust intensity)") + xlab("Month") +
+    ggtitle("B") +
+  theme(panel.grid = element_blank(), legend.position = "none",
+        plot.title = element_text(hjust = 0.5, face = "bold")) + 
+  scale_x_continuous(breaks = c(4, 8, 12, 16), labels = month.labels) +
+  facet_wrap(~runYear, ncol=1) + 
+  coord_cartesian(ylim = c(-2.302585, 4.5), xlim = c(1,16), expand = 0)} %>%
+  tag_facet(hjust = -0.2, vjust = 1.4, tag_pool = 2014:2019, 
+            open="", close="", fontface=1, size = 2)
+
+
+
+# ggsave(plot = plot.data, width = 60, height = 240, dpi = 600, units = "mm", filename = "plot.data.png")
+```
+
+```{r roya_spatial}
+library(ggpubr)
+quadcoords <- read.csv(here("Data/quadrat_coords.csv")) %>% mutate(x = x + 250) %>% mutate(y = -y + 600)
+
+takeoffs.xy <- takeoffs2 %>% left_join(quadcoords)
+
+getPalette = colorRampPalette(RColorBrewer::brewer.pal(12, "Spectral"))
+
+circlePalette <- function(n){
+  ramp1 <- getPalette(n%/%2 + 1)[-(n%/%2 + 1)]
+  ramp2 <- rev(getPalette(n%/%2 + 1))
+  if(n%%2==0){
+    ramp2 <- ramp2[-(n%/%2 + 1)]
+  }
+  return(c(ramp1, ramp2))
+}
+
+shiftPalette <- function(n, shift){
+  ramp <- getPalette(n)
+  rampshift <- c(ramp[(n-shift):n], ramp[1:shift])
+  return(rampshift)
+  }
+
+
+spatial.takeoff<- {ggplot(takeoffs.xy, aes(x = x, y = y)) + 
+  geom_tile(quadcoords, 
+            mapping = aes(x = x, y = y), 
+            inherit.aes = FALSE, fill = "gray20", alpha = 0.2) + 
+  geom_tile(aes(fill = factor(startMonth))) + 
+  scale_fill_manual(values = getPalette(12),
+                    guide = 
+                      guide_legend(nrow=2, byrow = TRUE,
+                                   label.position = "bottom",
+                                   title.position = "top")) +
+    labs(fill = "Month") +
+  facet_wrap(~runYear, ncol = 1) + coord_fixed() + theme_article() +
+  scale_x_continuous(breaks = seq(0, 750, by = 100)) +
+  ggtitle("A") +
+  theme(axis.ticks = element_blank(), axis.text = element_blank(), 
+        axis.title = element_blank(),
+        legend.key.size = unit(3, "mm"),
+        # plot.margin = unit(c(0,0,10,0), "points"),
+        legend.position="bottom",
+        legend.title.align = 0.5,
+        legend.text = element_text(size = 6),
+        legend.title = element_text(size = 6),
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        legend.margin = margin(c(0,0,0,0)))} %>%
+  tag_facet(hjust = -0.2, vjust = 1.4, tag_pool = 2014:2019, 
+            open="", close="", fontface=1, size = 2)
+
+spatial.takeoff.legend <- as_ggplot(get_legend(spatial.takeoff))
+
+library(wesanderson)
+pal <- wes_palette("Zissou1", 100, type = "continuous")
+
+spatial.lambda <- {ggplot(takeoffs.xy, aes(x = x, y = y)) + 
+  geom_tile(quadcoords, 
+            mapping = aes(x = x, y = y), 
+            inherit.aes = FALSE, fill = "gray20", alpha = 0.2) + 
+  geom_tile(aes(fill = dif)) + 
+  scale_fill_gradientn(colors = pal, #breaks = c(-0.2,0,0.3),
+                       guide = guide_colourbar(
+                         title.position = "top",
+                         barwidth = unit(15, "mm"),
+                         ticks = TRUE, title.hjust = 0.5)) +
+  labs(fill = expression(lambda)) +
+  facet_wrap(~runYear, ncol = 1) + coord_fixed() + theme_article() +
+  scale_x_continuous(breaks = seq(0, 750, by = 100)) +
+  ggtitle("C") +
+  theme(axis.ticks = element_blank(), axis.text = element_blank(), 
+        axis.title = element_blank(),
+        #legend.key.size = unit(2, "mm"),
+        # plot.margin = unit(c(0,0,10,0), "points"),
+        legend.position="bottom",
+        legend.text = element_text(size = 6), 
+        legend.title = element_text(size = 6),
+        plot.title = element_text(hjust = 0.5, face = "bold"),
+        legend.margin = margin(c(0,0,0,0)))} %>%
+  tag_facet(hjust = -0.2, vjust = 1.4, tag_pool = 2014:2019, 
+            open="", close="", fontface=1, size = 2)
+
+spatial.lambda.legend <- as_ggplot(get_legend(spatial.lambda))
+
+combinedplot <- grid.arrange(
+  spatial.takeoff + theme(legend.position = "none") +
+    theme(plot.margin = unit(c(0,0,0,0), "mm")),
+  plot.data +
+    theme(plot.margin = unit(c(0,0,0,0), "mm")), 
+  spatial.lambda + theme(legend.position = "none") +
+    theme(plot.margin = unit(c(0,0,0,0), "mm")), 
+  spatial.takeoff.legend,
+  spatial.lambda.legend,
+  nrow = 2, layout_matrix = rbind(c(1,1,2,2,2,3,3),c(4,4,2,2,2,5,5)),
+  heights = c(0.8,0.2))
+
+# combinedplot2 <- plot_grid(spatial.takeoff.tag, plot.data, spatial.lambda.tag, 
+#                   align = "v", nrow = 1, axis = "t", greedy = FALSE,
+#                   rel_heights = c(1,1,1))
+
+ggsave(plot = combinedplot, width = 133, height = 115, dpi = 600, units = "mm", filename = "fig2.png")
+```
+
+```{r bayes_plot}
+library(tidybayes)
+library(ggdist)
+
+takeoff.var <- takeoff.brms2 %>% 
+  spread_draws(b_startMonth_numYear, b_dif_numYear,
+               b_startMonth_rain, b_dif_rain,
+               b_startMonth_planting, b_dif_planting,
+               cor_quadrat__startMonth_Intercept__dif_Intercept) %>%
+  median_hdci(b_startMonth_numYear, b_dif_numYear,
+              b_startMonth_rain = b_startMonth_rain,
+              b_dif_rain = b_dif_rain,
+              b_startMonth_planting, b_dif_planting,
+              cor_quadrat__startMonth_Intercept__dif_Intercept,
+             .width = c(.90, .66)) %>% 
+  pivot_longer(b_startMonth_numYear:cor_quadrat__startMonth_Intercept__dif_Intercept.upper, 
+               names_to = "variable", values_to = "value") 
+
+plotvars <- takeoff.var %>% slice(1:18,22:39) %>%
+  separate(variable, into = c(NA, "dep", "ind", "ci")) %>% 
+  mutate(ci = if_else(is.na(ci), "estimate", ci)) %>%
+  pivot_wider(id_cols = c(dep, ind, .width), 
+              names_from = ci, values_from = value) %>%
+  mutate(dep = recode_factor(dep, 
+                             startMonth = "Takeoff month", dif = "lambda")) %>%
+  mutate(ind = recode_factor(ind, numYear = "year"))
+
+p.bfe <- ggplot(plotvars, 
+                aes(y = ind, x = estimate, xmin = lower, xmax = upper)) +
+  geom_pointinterval() + ylab("Covariate") + xlab("Estimated effect") +
+  facet_wrap(~dep, scales = "free_x") +
+  geom_text(mapping = aes(label = dep), x = Inf, y = Inf,
+            hjust=1.1, vjust=1.1, size = 3, fontface = "italic") +
+  theme_article() + geom_vline(xintercept = 0, lty = 2)
+
+# ggsave(plot = p.bfe, width = 130, height = 89, dpi = 600, units = "mm", filename = "fig3_fe.png")
+
+```
+
+```{r re_corr}
+library(tidybayes)
+recor <- takeoff.brms2 %>% 
+  gather_draws(cor_quadrat__startMonth_Intercept__dif_Intercept #,
+               # cor_runYear__startMonth_Intercept__dif_Intercept
+               ) %>%
+  median_hdci(.width = c(.90, .66))
+  
+ranefs <- ranef(takeoff.brms2)$quadrat[,"Estimate",] %>% 
+  as_tibble() %>% mutate(re = "Quadrat offsets") %>%
+  bind_rows(ranef(takeoff.brms2)$runYear[,"Estimate",] %>% 
+              as_tibble() %>% mutate(re = "Year offsets"))
+
+corr.text <- data.frame(
+  label = c("cor = -0.58 (-0.98, -0.16)", ""),
+  re = c("Quadrat offsets", "Year offsets")
+)
+
+p.re <- ggplot(ranefs, aes(dif_Intercept, startMonth_Intercept)) + 
+  geom_point(size=0.5, color = "gray20") + theme_article() + 
+  xlab("lambda offsets") + ylab("Takeoff month offsets") +
+  facet_wrap(~re, nrow=2) + 
+  theme(strip.text = element_text(face = "bold"),
+        text = element_text(size = 8)) +
+  geom_text(data = corr.text, 
+            mapping = aes(label = label), x = Inf, y = Inf,
+            hjust=1.05, vjust=1.4, size = 2.2)
+
+
+# ggsave(plot = p.re, width = 50, height = 89, dpi = 600, units = "mm", filename = "fig3_re.png")
+
+fig3 <- ggarrange(p.bfe %>% 
+                    tag_facet(tag_pool = c("A","B"), open="", close=""), 
+                  p.re %>%
+                    tag_facet(tag_pool = c("C","D"), open="", close=""), 
+                  nrow =1, widths = c(0.7, 0.3))
+
+ggsave(plot = fig3, width = 183, height = 65, dpi = 600, units = "mm", filename = "fig3.png")
+```
